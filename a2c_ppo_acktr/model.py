@@ -205,7 +205,6 @@ class CNNBase(NNBase):
 
         return self.critic_linear(x), x, rnn_hxs
 
-
 class MLPBase(NNBase):
     def __init__(self, num_inputs, agent_num, recurrent=False, assign_id=False, hidden_size=100):
         super(MLPBase, self).__init__(recurrent, num_inputs, hidden_size)
@@ -250,6 +249,59 @@ class MLPBase(NNBase):
         
         return self.critic_linear(hidden_critic), hidden_actor, rnn_hxs
 
+
+class ObsEncoder(nn.Module):
+    def __init__(self, hidden_size=100):
+        super(ObsEncoder, self).__init__()
+        
+        self.self_encoder = nn.Linear(4, hidden_size)
+        self.other_agent_encoder = nn.Linear(2, hidden_size)
+        self.landmark_encoder = nn.Linear(2, hidden_size)
+        self.agent_correlation_mat = nn.Parameter(torch.FloatTensor(hidden_size,hidden_size),requires_grad=True)
+        self.agent_correlation_mat.data.fill_(0.25)
+        self.landmark_correlation_mat = nn.Parameter(torch.FloatTensor(hidden_size,hidden_size),requires_grad=True)
+        self.landmark_correlation_mat.data.fill_(0.25)
+        self.fc = nn.Linear(hidden_size, hidden_size)
+        self.encoder_linear = nn.Linear(3*hidden_size, hidden_size)
+
+    def forward(self, inputs, agent_num=3):
+        batch_size = inputs.shape[0]
+        obs_dim = inputs.shape[-1]
+        landmark_num = int((obs_dim - 8)/2 - 2)
+        self_emb = self.self_encoder(inputs[:, :4])
+        other_agent_emb = []
+        beta_agent = []
+        landmark_emb = []
+        beta_landmark = []
+        for i in range(agent_num - 1):
+            one_agent_emb = self.other_agent_encoder(inputs[:, 4+2*landmark_num+2*i:4+2*landmark_num+2*(i+1)])
+            other_agent_emb.append(one_agent_emb)
+            beta_ij = torch.matmul(self_emb.view(batch_size,1,-1), self.agent_correlation_mat)                #[batch_size, 1, hidden_size]
+            beta_ij = torch.matmul(beta_ij, one_agent_emb.view(batch_size,-1,1))       #[batch_size, 1, 1]
+            beta_agent.append(beta_ij.squeeze(1).squeeze(1))
+        for i in range(landmark_num):
+            one_landmark_emb = self.landmark_encoder(inputs[:, 4+2*i:4+2*(i+1)])
+            landmark_emb.append(one_landmark_emb)
+            beta_ij = torch.matmul(self_emb.view(batch_size,1,-1), self.landmark_correlation_mat)                #[batch_size, 1, hidden_size]
+            beta_ij = torch.matmul(beta_ij, one_landmark_emb.view(batch_size,-1,1))       #[batch_size, 1, 1]
+            beta_landmark.append(beta_ij.squeeze(1).squeeze(1))
+        other_agent_emb = torch.stack(other_agent_emb,dim = 1)    #(batch_size,n_agents-1,eb_dim)
+        beta_agent = torch.stack(beta_agent,dim = 1) 
+        landmark_emb = torch.stack(landmark_emb,dim = 1)    #(batch_size,n_agents-1,eb_dim)
+        beta_landmark = torch.stack(beta_landmark,dim = 1) 
+        alpha_agent = F.softmax(beta_agent,dim = 1).unsqueeze(2)   
+        alpha_landmark = F.softmax(beta_landmark,dim = 1).unsqueeze(2)
+        other_agent_vi = torch.mul(alpha_agent,other_agent_emb)
+        other_agent_vi = torch.sum(other_agent_vi,dim=1)
+        landmark_vi = torch.mul(alpha_landmark,landmark_emb)
+        landmark_vi = torch.sum(landmark_vi,dim=1)
+        gi = self.fc(self_emb)
+        f = self.encoder_linear(torch.cat([gi, other_agent_vi, landmark_vi], dim=1))
+        return f
+        
+
+
+
 class ATTBase(NNBase):
     def __init__(self, num_inputs, agent_num, recurrent=False, assign_id=False, hidden_size=100):
         super(ATTBase, self).__init__(recurrent, num_inputs, hidden_size)
@@ -264,7 +316,8 @@ class ATTBase(NNBase):
                 init_(nn.Linear(num_inputs, hidden_size)), nn.Tanh(),
                 init_(nn.Linear(hidden_size, hidden_size)), nn.Tanh())
 
-        self.encoder = init_(nn.Linear(num_inputs, hidden_size))
+        #self.encoder = init_(nn.Linear(num_inputs, hidden_size))
+        self.encoder = ObsEncoder(hidden_size=hidden_size)
 
         self.correlation_mat = nn.Parameter(torch.FloatTensor(hidden_size,hidden_size),requires_grad=True)
         self.correlation_mat.data.fill_(0.25)
@@ -286,7 +339,8 @@ class ATTBase(NNBase):
         obs_dim = inputs.shape[-1]
         hidden_actor = self.actor(inputs) 
 
-        f_ii = self.encoder(inputs)    #[batch_size, hidden_size]
+        #f_ii = self.encoder(inputs)    #[batch_size, hidden_size]
+        f_ii = self.encoder(inputs, self.agent_num)
         obs_encoder = []
         beta = []
         for i in range(self.agent_num):
@@ -306,3 +360,5 @@ class ATTBase(NNBase):
         value = self.critic_linear(torch.cat([gi, vi], dim=1))
         
         return value, hidden_actor, rnn_hxs
+
+    

@@ -29,7 +29,7 @@ render = False
 seed = 1
 log_interval = 10
 
-env = make_env("simple_spread", discrete_action=True)
+env = make_env("simple_spread_e", discrete_action=True)
 num_state = env.observation_space[0].shape[0]
 num_action = env.action_space[0].n
 #torch.manual_seed(seed)
@@ -69,8 +69,8 @@ if __name__ == '__main__':
     # agent4 = Actor()
     # agent5 = Actor()
     args = get_args()
-    n_episodes = 100
-    save_gifs = False
+    n_episodes = 10
+    save_gifs = True
     episode_length = 50
     nagents = args.agent_num
     ifi = 1 / 30
@@ -86,8 +86,8 @@ if __name__ == '__main__':
     #     agents.append(MLPBase())
     # start = time.time()
     for i in range(nagents):
-        #actor_critic, ob_rms = torch.load('/home/tsui/marl-pytorch/pytorch-a2c-ppo-acktr-gail/trained_models/ppo' + args.model_dir + '/agent_%i' % (i+1) + ".pt")
-        actor_critic, ob_rms = torch.load('/home/tsui/marl-pytorch/pytorch-a2c-ppo-acktr-gail/trained_models/ppo' + args.model_dir + '/agent_1' + ".pt")
+        actor_critic, ob_rms = torch.load('/home/tsui/marl-pytorch/pytorch-a2c-ppo-acktr-gail/trained_models/ppo' + args.model_dir + '/agent_%i' % (i+1) + ".pt")
+        #actor_critic, ob_rms = torch.load('/home/tsui/marl-pytorch/pytorch-a2c-ppo-acktr-gail/trained_models/ppo' + args.model_dir + '/agent_1' + ".pt")
         agents.append(actor_critic)
     if not os.path.exists('./gifs/' + model_dir):
         os.makedirs('./gifs/' + model_dir)
@@ -104,7 +104,7 @@ if __name__ == '__main__':
         if save_gifs:
             frames = []
             frames.append(env.render('rgb_array')[0])
-        #env.render('human')
+        env.render('human')
         for t_i in range(episode_length):
             calc_start = time.time()
             # rearrange observations to be per agent, and convert to torch Variable
@@ -141,6 +141,7 @@ if __name__ == '__main__':
             #import pdb; pdb.set_trace()
             # start = time.time()
             obs, rewards, dones, infos = env.step(actions)
+            #pdb.set_trace()
             # end = time.time()
             # print('env', round(end-start,4))
             masks.fill_(0.0 if dones else 1.0)
@@ -155,7 +156,7 @@ if __name__ == '__main__':
             elapsed = calc_end - calc_start
             if elapsed < ifi:
                 time.sleep(ifi - elapsed)
-            #env.render('human')
+            env.render('human')
             # end = time.time()
             # print('sleep', round(end-start,4))
 

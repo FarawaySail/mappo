@@ -94,7 +94,8 @@ class PPO():
                 action_loss_epoch += action_loss.item()
                 dist_entropy_epoch += dist_entropy.item()
                 self.training_step += 1
-                #import pdb; pdb.set_trace()
+                #if rollouts.rewards.max() > 2:
+                #    import pdb; pdb.set_trace()
                 self.writer.add_scalars('agent%i/mean_episode_reward' % self.agent_i,
                     {'reward': rollouts.rewards.mean()},
                     self.training_step)

@@ -245,8 +245,9 @@ def main():
             #start = time.time()
             #pdb.set_trace()            
             obs, reward, done, infos = envs.step(action)
-            
-            #import pdb; pdb.set_trace()
+            #print(reward.max())
+            #if(reward.max()>2):
+            #    import pdb; pdb.set_trace()
             #end = time.time()
             #print("step time: ", end-start)
             for info in infos:
@@ -283,7 +284,7 @@ def main():
                     rollouts[i].insert(torch.tensor(obs.reshape(args.num_processes, -1)), torch.tensor(obs[:,i,:]), 
                                 recurrent_hidden_states, action_list[i],
                                 action_log_prob_list[i], value_list[i], torch.tensor(reward[:, i].reshape(-1,1)), masks, bad_masks)
-        #import pdb; pdb.set_trace()
+        
         with torch.no_grad():
             next_value_list = []
             for i in range(args.agent_num):
@@ -308,18 +309,17 @@ def main():
                 rollouts.rewards[step] = discr.predict_reward(
                     rollouts.obs[step], rollouts.actions[step], args.gamma,
                     rollouts.masks[step])
+        
         for i in range(args.agent_num):
             rollouts[i].compute_returns(next_value_list[i], args.use_gae, args.gamma,
                                     args.gae_lambda, args.use_proper_time_limits)
 
-        #import pdb; pdb.set_trace()
         for i in range(args.agent_num):
             value_loss, action_loss, dist_entropy = agent[i].update(rollouts[i])
             #import pdb; pdb.set_trace()
             if (i == 0 and (j+1)%10 == 0):
                 print("update num: " + str(j+1) + " value loss: " + str(value_loss))
         #rollouts.after_update()
-        
         obs = envs.reset()
         if args.assign_id:
             for i in range(args.agent_num):    
