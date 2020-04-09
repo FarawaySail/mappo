@@ -3,7 +3,7 @@ import glob
 import os
 import time
 from collections import deque
-
+os.environ["CUDA_VISIBLE_DEVICES"] = "1"
 import gym
 import numpy as np
 import torch

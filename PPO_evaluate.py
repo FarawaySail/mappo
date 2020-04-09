@@ -29,7 +29,7 @@ render = False
 seed = 1
 log_interval = 10
 
-env = make_env("simple_spread_e", discrete_action=True)
+env = make_env("simple_spread", discrete_action=True)
 num_state = env.observation_space[0].shape[0]
 num_action = env.action_space[0].n
 #torch.manual_seed(seed)
@@ -69,11 +69,11 @@ if __name__ == '__main__':
     # agent4 = Actor()
     # agent5 = Actor()
     args = get_args()
-    n_episodes = 10
-    save_gifs = True
-    episode_length = 50
+    n_episodes = 100
+    save_gifs = False
+    episode_length = 120
     nagents = args.agent_num
-    ifi = 1 / 30
+    ifi = 1 / 60
     gif_path = './gifs'
     success_rate = 0
     num_success = 0
@@ -86,8 +86,10 @@ if __name__ == '__main__':
     #     agents.append(MLPBase())
     # start = time.time()
     for i in range(nagents):
-        actor_critic, ob_rms = torch.load('/home/tsui/marl-pytorch/pytorch-a2c-ppo-acktr-gail/trained_models/ppo' + args.model_dir + '/agent_%i' % (i+1) + ".pt")
-        #actor_critic, ob_rms = torch.load('/home/tsui/marl-pytorch/pytorch-a2c-ppo-acktr-gail/trained_models/ppo' + args.model_dir + '/agent_1' + ".pt")
+        if i < 4:
+            actor_critic, ob_rms = torch.load('/home/tsui/marl-pytorch/pytorch-a2c-ppo-acktr-gail/trained_models/ppo' + args.model_dir + '/agent_%i' % (i+1) + ".pt")
+        else:
+            actor_critic, ob_rms = torch.load('/home/tsui/marl-pytorch/pytorch-a2c-ppo-acktr-gail/trained_models/ppo' + args.model_dir + '/agent_1' + ".pt")
         agents.append(actor_critic)
     if not os.path.exists('./gifs/' + model_dir):
         os.makedirs('./gifs/' + model_dir)
@@ -104,7 +106,7 @@ if __name__ == '__main__':
         if save_gifs:
             frames = []
             frames.append(env.render('rgb_array')[0])
-        env.render('human')
+        #env.render('human')
         for t_i in range(episode_length):
             calc_start = time.time()
             # rearrange observations to be per agent, and convert to torch Variable
@@ -121,6 +123,8 @@ if __name__ == '__main__':
             for i in range(nagents):
                 obs = state[i].view(-1, num_state)
                 value, action, _, recurrent_hidden_states = agents[i].act(share_obs, obs, i, recurrent_hidden_states, masks)
+                #value, action, _, recurrent_hidden_states, alpha_agent, alpha_landmark = agents[i].act(share_obs, obs, i, recurrent_hidden_states, masks)
+                #pdb.set_trace()
                 actions.append(action)
             torch_actions = actions
             end = time.time()
@@ -156,7 +160,7 @@ if __name__ == '__main__':
             elapsed = calc_end - calc_start
             if elapsed < ifi:
                 time.sleep(ifi - elapsed)
-            env.render('human')
+            #env.render('human')
             # end = time.time()
             # print('sleep', round(end-start,4))
 
@@ -164,6 +168,8 @@ if __name__ == '__main__':
                 reach_num = num_reach(env.world)
                 # writer.add_scalar('number_reach' , num_reach, ep_i)
                 # writer.add_scalar('cover rate' , num_reach/nagents, ep_i)
+                if reach_num > nagents:
+                    reach_num = nagents
                 print('number_reach', reach_num)
                 print('cover rate once', reach_num/nagents)
                 cover_rate_sum = cover_rate_sum + reach_num/nagents
@@ -174,5 +180,6 @@ if __name__ == '__main__':
                 gif_num += 1
             imageio.mimsave('./gifs/' + model_dir + '/%i_%i.gif' % (gif_num, ep_i),
                             frames, duration=ifi)
+            imageio.imwrite('./gifs/' + model_dir + '/%i_%i.jpg' % (gif_num, ep_i),frames[60])
     print('cover_rate', cover_rate_sum/n_episodes)
     # print('success rate',num_success/n_episodes)

@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 from a2c_ppo_acktr.distributions import Bernoulli, Categorical, DiagGaussian
 from a2c_ppo_acktr.utils import init
-
+import time
 
 class Flatten(nn.Module):
     def forward(self, x):
@@ -23,6 +23,7 @@ class Policy(nn.Module):
                 self.base = base(obs_shape[0], agent_num, **base_kwargs)
             elif len(obs_shape) == 1:
                 base = MLPBase
+                #base = ATTBase
                 self.base = base(obs_shape[0], agent_num, **base_kwargs)
             else:
                 raise NotImplementedError
@@ -65,6 +66,7 @@ class Policy(nn.Module):
 
     def act(self, share_inputs, inputs, rnn_hxs, masks, deterministic=False):
         value, actor_features, rnn_hxs = self.base(share_inputs, inputs, self.agent_i, rnn_hxs, masks)
+        #value, actor_features, rnn_hxs, alpha_agent, alpha_landmark = self.base(share_inputs, inputs, self.agent_i, rnn_hxs, masks)
         dist = self.dist(actor_features)
         if deterministic:
             action = dist.mode()
@@ -254,6 +256,9 @@ class ObsEncoder(nn.Module):
     def __init__(self, hidden_size=100):
         super(ObsEncoder, self).__init__()
         
+        init_ = lambda m: init(m, nn.init.orthogonal_, lambda x: nn.init.
+                               constant_(x, 0), np.sqrt(2))
+        '''                        
         self.self_encoder = nn.Linear(4, hidden_size)
         self.other_agent_encoder = nn.Linear(2, hidden_size)
         self.landmark_encoder = nn.Linear(2, hidden_size)
@@ -263,38 +268,79 @@ class ObsEncoder(nn.Module):
         self.landmark_correlation_mat.data.fill_(0.25)
         self.fc = nn.Linear(hidden_size, hidden_size)
         self.encoder_linear = nn.Linear(3*hidden_size, hidden_size)
+        '''
+        self.self_encoder = nn.Sequential(
+                            init_(nn.Linear(4, hidden_size)), nn.Tanh())
+        self.other_agent_encoder = nn.Sequential(
+                            init_(nn.Linear(2, hidden_size)), nn.Tanh())
+        self.landmark_encoder = nn.Sequential(
+                            init_(nn.Linear(2, hidden_size)), nn.Tanh())
+        self.agent_correlation_mat = nn.Parameter(torch.FloatTensor(hidden_size,hidden_size),requires_grad=True)
+        nn.init.orthogonal_(self.agent_correlation_mat.data, gain=1)
+        self.landmark_correlation_mat = nn.Parameter(torch.FloatTensor(hidden_size,hidden_size),requires_grad=True)
+        nn.init.orthogonal_(self.landmark_correlation_mat.data, gain=1)
+        self.fc = nn.Sequential(
+                    init_(nn.Linear(hidden_size, hidden_size)), nn.Tanh())
+        #self.encoder_linear = init_(nn.Linear(3*hidden_size, hidden_size))
+        # 加上激活函数 效果会有比较大的提升 虽然还是达不到标准
+        self.encoder_linear = nn.Sequential(
+                            init_(nn.Linear(hidden_size * 3, hidden_size)), nn.Tanh(),
+                            init_(nn.Linear(hidden_size, hidden_size)), nn.Tanh())
 
-    def forward(self, inputs, agent_num=3):
+        #self.layer_norm_1 = nn.LayerNorm(hidden_size)
+        #self.layer_norm_2 = nn.LayerNorm(hidden_size)
+
+    # agent_num需要手动设置一下
+    def forward(self, inputs, agent_num=16):
         batch_size = inputs.shape[0]
         obs_dim = inputs.shape[-1]
-        landmark_num = int((obs_dim - 8)/2 - 2)
+        landmark_num = int((obs_dim-4)/2)-(agent_num-1)
+        #landmark_num = int((obs_dim-4-4*(agent_num-1))/3)
+        #import pdb; pdb.set_trace()
         self_emb = self.self_encoder(inputs[:, :4])
         other_agent_emb = []
         beta_agent = []
         landmark_emb = []
         beta_landmark = []
+        #start = time.time()
+
+        agent_beta_ij = torch.matmul(self_emb.view(batch_size,1,-1), self.agent_correlation_mat)
+        landmark_beta_ij = torch.matmul(self_emb.view(batch_size,1,-1), self.landmark_correlation_mat) 
+
         for i in range(agent_num - 1):
-            one_agent_emb = self.other_agent_encoder(inputs[:, 4+2*landmark_num+2*i:4+2*landmark_num+2*(i+1)])
-            other_agent_emb.append(one_agent_emb)
-            beta_ij = torch.matmul(self_emb.view(batch_size,1,-1), self.agent_correlation_mat)                #[batch_size, 1, hidden_size]
-            beta_ij = torch.matmul(beta_ij, one_agent_emb.view(batch_size,-1,1))       #[batch_size, 1, 1]
-            beta_agent.append(beta_ij.squeeze(1).squeeze(1))
+            other_agent_emb.append(inputs[:, 4+2*landmark_num+2*i:4+2*landmark_num+2*(i+1)])
+            #one_agent_emb = self.other_agent_encoder(inputs[:, 4+2*landmark_num+2*i:4+2*landmark_num+2*(i+1)])
+            #import pdb; pdb.set_trace()
+            #other_agent_emb.append(one_agent_emb)
+            #beta_ij = torch.matmul(self_emb.view(batch_size,1,-1), self.agent_correlation_mat)                #[batch_size, 1, hidden_size]
+            #beta_ij = torch.matmul(agent_beta_ij, one_agent_emb.view(batch_size,-1,1))       #[batch_size, 1, 1]
+            #beta_agent.append(beta_ij.squeeze(1).squeeze(1))
         for i in range(landmark_num):
-            one_landmark_emb = self.landmark_encoder(inputs[:, 4+2*i:4+2*(i+1)])
-            landmark_emb.append(one_landmark_emb)
-            beta_ij = torch.matmul(self_emb.view(batch_size,1,-1), self.landmark_correlation_mat)                #[batch_size, 1, hidden_size]
-            beta_ij = torch.matmul(beta_ij, one_landmark_emb.view(batch_size,-1,1))       #[batch_size, 1, 1]
-            beta_landmark.append(beta_ij.squeeze(1).squeeze(1))
+            landmark_emb.append(inputs[:, 4+2*i:4+2*(i+1)])
+            #one_landmark_emb = self.landmark_encoder(inputs[:, 4+2*i:4+2*(i+1)])
+            #landmark_emb.append(one_landmark_emb)
+            #beta_ij = torch.matmul(self_emb.view(batch_size,1,-1), self.landmark_correlation_mat)                #[batch_size, 1, hidden_size]
+            #beta_ij = torch.matmul(landmark_beta_ij, one_landmark_emb.view(batch_size,-1,1))       #[batch_size, 1, 1]
+            #beta_landmark.append(beta_ij.squeeze(1).squeeze(1))
         other_agent_emb = torch.stack(other_agent_emb,dim = 1)    #(batch_size,n_agents-1,eb_dim)
-        beta_agent = torch.stack(beta_agent,dim = 1) 
+        other_agent_emb = self.other_agent_encoder(other_agent_emb)
+        #beta_agent = torch.stack(beta_agent,dim = 1) 
+        beta_agent = torch.matmul(agent_beta_ij, other_agent_emb.permute(0,2,1)).squeeze(1)
         landmark_emb = torch.stack(landmark_emb,dim = 1)    #(batch_size,n_agents-1,eb_dim)
-        beta_landmark = torch.stack(beta_landmark,dim = 1) 
+        landmark_emb = self.landmark_encoder(landmark_emb)
+        #beta_landmark = torch.stack(beta_landmark,dim = 1) 
+        beta_landmark = torch.matmul(landmark_beta_ij, landmark_emb.permute(0,2,1)).squeeze(1)
         alpha_agent = F.softmax(beta_agent,dim = 1).unsqueeze(2)   
         alpha_landmark = F.softmax(beta_landmark,dim = 1).unsqueeze(2)
         other_agent_vi = torch.mul(alpha_agent,other_agent_emb)
+        #other_agent_vi = self.layer_norm_1(other_agent_vi)
         other_agent_vi = torch.sum(other_agent_vi,dim=1)
         landmark_vi = torch.mul(alpha_landmark,landmark_emb)
+        #landmark_vi = self.layer_norm_2(landmark_vi)
         landmark_vi = torch.sum(landmark_vi,dim=1)
+        #end = time.time()
+        #print("time: ", end-start)
+        #import pdb; pdb.set_trace()
         gi = self.fc(self_emb)
         f = self.encoder_linear(torch.cat([gi, other_agent_vi, landmark_vi], dim=1))
         return f
@@ -312,21 +358,28 @@ class ATTBase(NNBase):
                                constant_(x, 0), np.sqrt(2))
 
         self.agent_num = agent_num
-        self.actor = nn.Sequential(
-                init_(nn.Linear(num_inputs, hidden_size)), nn.Tanh(),
-                init_(nn.Linear(hidden_size, hidden_size)), nn.Tanh())
-
+        #是否要用attention-based policy network    
+        #self.actor = nn.Sequential(
+        #        init_(nn.Linear(num_inputs, hidden_size)), nn.Tanh(),
+        #        init_(nn.Linear(hidden_size, hidden_size)), nn.Tanh())
+    
+        self.actor = ObsEncoder(hidden_size=hidden_size)
         #self.encoder = init_(nn.Linear(num_inputs, hidden_size))
         self.encoder = ObsEncoder(hidden_size=hidden_size)
 
         self.correlation_mat = nn.Parameter(torch.FloatTensor(hidden_size,hidden_size),requires_grad=True)
-        self.correlation_mat.data.fill_(0.25)
+        #self.correlation_mat.data.fill_(0.25)
+        nn.init.orthogonal_(self.correlation_mat.data, gain=1)
 
-        self.fc = init_(nn.Linear(hidden_size, hidden_size))
+        #self.fc = init_(nn.Linear(hidden_size, hidden_size))
+        self.fc = nn.Sequential(
+                init_(nn.Linear(hidden_size, hidden_size)), nn.Tanh())
 
         self.critic_linear = nn.Sequential(
                 init_(nn.Linear(hidden_size * 2, hidden_size)), nn.Tanh(),
                 init_(nn.Linear(hidden_size, 1)))
+
+        #self.layer_norm_1 = nn.LayerNorm(hidden_size)
 
         self.train()
 
@@ -337,28 +390,40 @@ class ATTBase(NNBase):
         """
         batch_size = inputs.shape[0]
         obs_dim = inputs.shape[-1]
-        hidden_actor = self.actor(inputs) 
-
+        #start = time.time()
+        hidden_actor = self.actor(inputs)
+        #hidden_actor, alpha_agent, alpha_landmark = self.actor(inputs)
         #f_ii = self.encoder(inputs)    #[batch_size, hidden_size]
-        f_ii = self.encoder(inputs, self.agent_num)
+        #f_ii = self.encoder(inputs, self.agent_num)
+        
+        f_ii = self.encoder(inputs)
+        obs_beta_ij = torch.matmul(f_ii.view(batch_size,1,-1), self.correlation_mat)
         obs_encoder = []
         beta = []
         for i in range(self.agent_num):
+        #for i in range(6):
             if i != agent_i:
+                #obs_encoder.append(share_inputs[:, i*obs_dim:(i+1)*obs_dim])
                 f_ij = self.encoder(share_inputs[:, i*obs_dim:(i+1)*obs_dim])     #[batch_size, hidden_size]
                 obs_encoder.append(f_ij)
-                beta_ij = torch.matmul(f_ii.view(batch_size,1,-1), self.correlation_mat)                #[batch_size, 1, hidden_size]
-                beta_ij = torch.matmul(beta_ij, f_ij.view(batch_size,-1,1))       #[batch_size, 1, 1]
+                #beta_ij = torch.matmul(f_ii.view(batch_size,1,-1), self.correlation_mat)                #[batch_size, 1, hidden_size]
+                #beta_ij = torch.matmul(obs_beta_ij, f_ij.view(batch_size,-1,1))       #[batch_size, 1, 1]
                 #obs_encoder.append(f_ij)
-                beta.append(beta_ij.squeeze(1).squeeze(1))
+                #beta.append(beta_ij.squeeze(1).squeeze(1))
         obs_encoder = torch.stack(obs_encoder,dim = 1)    #(batch_size,n_agents-1,eb_dim)
-        beta = torch.stack(beta,dim = 1)  
+        #beta = torch.stack(beta,dim = 1)  
+        beta = torch.matmul(obs_beta_ij, obs_encoder.permute(0,2,1)).squeeze(1)
         alpha = F.softmax(beta,dim = 1).unsqueeze(2)
         vi = torch.mul(alpha,obs_encoder)
+        #vi = self.layer_norm_1(vi)
         vi = torch.sum(vi,dim = 1)
         gi = self.fc(f_ii)
         value = self.critic_linear(torch.cat([gi, vi], dim=1))
+        #end = time.time()
+        #print("ATTBase time: ", end-start)
+        #import pdb; pdb.set_trace()
         
+        #value = 0
         return value, hidden_actor, rnn_hxs
 
     
